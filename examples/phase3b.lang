@@ -1,0 +1,11 @@
+fn set (x : &mut int) -> int {
+  *x = 42;
+  return 0
+};
+
+let mut value = 1;
+
+set(&mut value);
+
+return value;
+

@@ -1,0 +1,5 @@
+(executable
+ (name main)
+ (public_name ownership-interp)
+ (package ownership_interp)
+ (libraries async interp base lang_grammar linenoise))

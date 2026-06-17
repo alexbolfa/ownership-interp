@@ -1,0 +1,11 @@
+let x = 1;
+let y = x;
+let mut xs = [x, y];
+
+push(xs, 3);
+insert(xs, 1, 4);
+remove(xs, 0);
+
+xs[1] = xs[1] + y;
+
+return xs 

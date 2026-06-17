@@ -1,0 +1,615 @@
+\documentclass[a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{xcolor, colortbl}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{multicol}
+\usepackage{listings}
+\usepackage{subcaption}
+\usepackage{microtype}
+
+\definecolor{codebg}{HTML}{F7F7F2}
+\definecolor{codekeyword}{HTML}{1D4E89}
+\definecolor{codecomment}{HTML}{5E6B5E}
+\definecolor{codestring}{HTML}{8A4F1D}
+\definecolor{codetype}{HTML}{7B2CBF}
+
+\lstdefinelanguage{AFPLang}{
+    sensitive=true,
+    morekeywords={let,mut,fn,return,if,then,else,while,spawn,yield,push,insert,remove,module,struct,end,type,fun,match,with,open,rec,in,and},
+    morekeywords=[2]{int,bool,unit,True,False,Some,None,Ok,Error,StateT,Either,Result,Deferred},
+    morecomment=[l]{--},
+    morecomment=[s]{(*}{*)},
+    morestring=[b]"
+}
+
+\lstset{
+    language=AFPLang,
+    frame=single,
+    framesep=5pt,
+    backgroundcolor=\color{codebg},
+    basicstyle=\small\ttfamily,
+    columns=fullflexible,
+    keepspaces=true,
+    breaklines=true,
+    tabsize=2,
+    inputencoding=utf8,
+    extendedchars=true,
+    showstringspaces=false,
+    keywordstyle=\color{codekeyword}\bfseries,
+    keywordstyle=[2]\color{codetype},
+    commentstyle=\color{codecomment}\itshape,
+    stringstyle=\color{codestring}
+}
+
+\hypersetup{colorlinks=true, linkcolor=blue!60!black, urlcolor=blue!60!black}
+\setcounter{secnumdepth}{3}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{\baselineskip}
+\renewcommand{\thesubsection}{\arabic{subsection}}
+\renewcommand{\thesubsubsection}{\thesubsection.\arabic{subsubsection}}
+
+\title{\textbf{Ownership Types}\\}
+\author{Alexandru Bolfa - 5495741}
+
+\begin{document}
+
+\maketitle
+
+\subsection*{Introduction}
+
+This report showcases the \textbf{implemented features} of the ownership
+language and explains how the project meets the \textbf{one-person AFP
+requirements}. It covers the syntax, the implemented feature phases, example
+programs, and the required functional-programming techniques used in the
+implementation: \textbf{persistent data structures}, \textbf{Accessor-based
+lenses/traversals}, and \textbf{monad transformers/effects}.
+
+The project README\footnote{The project README is also included as
+Appendix~\ref{appendix:readme}.} is the practical guide for building and running
+the project. This report is the \emph{design and architecture overview:} what
+was built, how the type checker and interpreter are organized, where the
+required techniques appear in the code, and why the \textbf{persistent borrow
+graph} counts as advanced usage.
+
+Section 1 outlines the \emph{syntax}, \emph{implemented features}, and
+\emph{pass pipeline}. Section 2 covers the \textbf{required techniques}. Section
+3 describes the persistent borrow graph used for \textbf{advanced usage}.
+Section 4 summarizes the type and ownership checks behind the implemented
+features.
+
+\subsection{Design and Scope}
+
+\subsubsection*{Syntax}
+
+The language is a \emph{small Rust-like subset}. It has ownership, borrowing,
+mutation, lists, functions, and cooperative concurrency:
+
+\begin{lstlisting}
+R ::= int | bool | unit | [R]
+T ::= R | &R | &mut R
+
+S ::= let x = E | let mut x = E | P = E
+    | fn f(params) -> T { S* } | { S* }
+    | if E then { S* } | if E then { S* } else { S* }
+    | while E { S* } | return E | E
+
+E ::= n | True | False | x | E op E | if E then E else E
+    | f(E*) | [E*] | E[E] | &P | &mut P | *E
+    | spawn(f(E*)) | yield()
+
+P ::= x | P[E] | *P
+\end{lstlisting}
+
+\texttt{unit} is the type for computations that do \emph{not} produce useful data.
+It has one runtime value, written as \texttt{()}, and is used by effect-only
+operations such as \texttt{yield()}, \texttt{spawn(f(args))}, and list mutation.
+
+\subsubsection*{Implemented features:}
+
+\begin{center}
+\begin{tabular}{r | p{.68\linewidth}}
+Phase 0 & Mutable variables, blocks and control flow, and more complex
+functions. \\
+Phase 1 & Affine types. \\
+2A & Lists. \\
+2B & Copyable primitives. \\
+3A & Immutable borrows. \\
+3B & Mutable borrows. \\
+4B & Multi-threading through \texttt{spawn} and \texttt{yield}. \\
+\end{tabular}
+\end{center}
+
+These features cover the \textbf{one-person phase targets}: phase 0 and phase
+1, two phase-2 features (\texttt{2A}, \texttt{2B}), two phase-3 features
+(\texttt{3A}, \texttt{3B}), and one phase-4 feature (\texttt{4B}). Together
+with the \textbf{advanced persistent borrow graph} in Section 3, this covers the
+feature and technique requirements listed for a one-person submission.
+
+\subsubsection*{Pipeline}
+
+The implementation is organized as a \textbf{small pass pipeline}. Expressions
+and statements are kept separate in Core, and assignments/borrows use a shared
+\emph{place} representation such as \texttt{x}, \texttt{xs[0]}, or \texttt{*r}.
+
+\begin{center}
+\small
+\setlength{\fboxsep}{6pt}
+\begin{tabular}{ccccccc}
+\fbox{\strut Lowering} & $\rightarrow$ &
+\fbox{\strut Typecheck} & $\rightarrow$ &
+\fbox{\strut Borrowcheck} & $\rightarrow$ &
+\fbox{\strut Interpret}
+\end{tabular}
+\end{center}
+
+\textbf{Lowering} gives names unique identities, \textbf{typechecking} assigns
+ordinary types, \textbf{borrow checking} enforces moves and active borrows, and
+\textbf{interpretation} runs only after both static checks pass. Runtime
+references are symbolic paths into the environment, so writing through
+\texttt{\&mut xs[0]} rebuilds the path back to \texttt{xs[0]}.
+
+\subsubsection*{Tools and Libraries}
+
+The corresponding \texttt{.mli} files document the higher-level functions and
+state types exposed by each pass. The tests include \textbf{positive examples}
+that should run and \textbf{negative examples} that should be rejected by name
+resolution, typechecking, borrow checking, or runtime checks.
+
+The implementation deliverables are the \textbf{typechecker},
+\textbf{interpreter}, \textbf{positive and negative test suite},
+\textbf{module documentation}, and this design overview.
+
+The main libraries are \texttt{Base} for data structures
+\cite{janestreet_base}, \texttt{Async} for \texttt{spawn}/\texttt{yield}
+\cite{janestreet_async}, \texttt{Accessor} for generated record accessors
+\cite{janestreet_accessor}, \texttt{monadic} for monad transformers
+\cite{denommus_monadic}, and \texttt{dune}/\texttt{ppx\_jane} for building and
+PPX support \cite{dune,janestreet_ppx_jane}.
+
+\subsection{Implementation Techniques}
+
+For a one-person submission, the required techniques are \textbf{persistent
+functional data structures}, \textbf{Accessor-based lenses}, and \textbf{monad
+transformers}.
+
+\subsubsection{Persistent Functional Data Structures}
+
+Environments are \emph{immutable} \texttt{Map.M(String)} values wrapped by
+\texttt{Common.Value.Env}. Updating a variable or function binding returns a new
+environment. Lists are also \textbf{persistent}: \path{src/common/plist.ml}
+rebuilds only the path that changes, which matters for writes through places such as
+\texttt{\&mut xs[0]}.
+
+In Haskell terms, the environments are used like persistent \texttt{Map} values:
+an update does not mutate the old environment, but returns a new version that
+shares unchanged structure with the previous one. The OCaml code follows the
+same model with \texttt{Base.Map}. For example, binding a variable uses
+\texttt{Env.bind}, which returns a new map-backed environment instead of editing
+the old one in place.
+
+The custom persistent list and borrow graph use the same idea for project-specific
+data. A list update rebuilds only the affected path, and the borrow graph
+operations such as \texttt{add\_edge}, \texttt{remove\_owner}, and
+\texttt{merge} all return new graph values. This is the same style as writing
+small immutable tree or graph transformations in Haskell.
+
+\subsubsection{Lenses / Traversals}
+
+Pass states are records with \textbf{generated accessors}. The local monadic
+wrappers expose \texttt{access} and \texttt{map\_access}, so a rule updates
+only the field it needs:
+
+\begin{lstlisting}
+M.map_access owns ~f:(Env.bind x Moved)
+\end{lstlisting}
+
+The OCaml mechanism is \texttt{ppx\_accessor} plus Jane Street's
+\texttt{Accessor} library. Each pass state is a record marked with
+\texttt{[@@deriving accessors]}, which generates values such as \texttt{owns},
+\texttt{graph}, \texttt{vars}, and \texttt{funs}. These generated accessors play
+the same role as Haskell lenses for record fields.
+
+The helper \texttt{M.access} corresponds to a Haskell-style \texttt{view}, and
+\texttt{M.map\_access} corresponds to applying an \texttt{over}-style update
+inside the current state:
+
+\begin{lstlisting}
+-- Haskell shape
+view owns state
+modify (over owns (Env.bind x Moved))
+\end{lstlisting}
+
+The OCaml code spells this through modules and functions instead of Haskell type
+classes:
+
+\begin{lstlisting}
+let access accessor =
+  AppM.create (fun s -> Except.pure (Accessor.get accessor s, s))
+
+let map_access accessor ~f =
+  AppM.create (fun s -> Except.pure ((), Accessor.map accessor s ~f))
+\end{lstlisting}
+
+This is used throughout the passes, not just once. For example, the borrow
+checker updates \texttt{owns} and \texttt{graph} independently, while the
+typechecker updates \texttt{vars}, \texttt{muts}, \texttt{funs}, and
+\texttt{ret} through the same accessor pattern.
+
+\subsubsection{Monad Transformers / Effects}
+
+The static passes use the same structure as Haskell's \textbf{\texttt{StateT
+AppState (Either String)}}, built with \texttt{monadic}:
+
+\[
+  \alpha\ AppM.t = AppState.t \to ((\alpha \times AppState.t),\ string)\ result.
+\]
+
+The main difference is syntactic. Haskell can write a transformer stack directly
+as a type alias, while the OCaml library builds the same stack through modules
+and functors. The Haskell shape is:
+
+\begin{lstlisting}
+type AppM a = StateT AppState (Either String) a
+\end{lstlisting}
+
+The OCaml version first wraps the state type in a module, then creates a
+\texttt{Result} monad whose error type is \texttt{string}, and finally places
+state on top of that result layer:
+
+\begin{lstlisting}
+module AppState = struct
+  type t = env
+end
+
+module Except = Monadic.Result.Make (struct
+  type t = string
+end)
+
+module AppM = Monadic.State.MakeT (Except) (AppState)
+\end{lstlisting}
+
+This gives the pass \texttt{AppM.get} and \texttt{AppM.put}, corresponding to
+Haskell's \texttt{get} and \texttt{put} from the state layer. It also gives
+\texttt{AppM.elevate}, which is the local equivalent of Haskell's \texttt{lift}.
+For example, throwing an error from the result layer is:
+
+\begin{lstlisting}
+let fail msg = AppM.elevate (Except.error msg)
+\end{lstlisting}
+
+which corresponds to the Haskell expression:
+
+\begin{lstlisting}
+fail msg = lift (Left msg)
+\end{lstlisting}
+
+Each static pass then wraps this in a small local \texttt{M} module so the rest
+of the pass can use \texttt{let\%bind}, \texttt{get}, \texttt{put},
+\texttt{fail}, \texttt{access}, and \texttt{map\_access} without repeating the
+transformer plumbing.
+
+The interpreter puts \textbf{\texttt{Async.Deferred.t}} under the same stack so
+\texttt{spawn} and \texttt{yield()} can suspend cooperatively. Conceptually,
+that interpreter stack is the OCaml equivalent of putting an asynchronous base
+monad under \texttt{ExceptT String} and then putting \texttt{StateT Env} on top:
+
+\begin{lstlisting}
+type EvalM a = StateT Env (ExceptT String Deferred) a
+\end{lstlisting}
+
+In the OCaml code, \texttt{Result.MakeT} builds the result transformer over
+\texttt{Deferred}, and \texttt{State.MakeT} adds the state layer above it. The
+helper \texttt{lift\_deferred} lifts scheduler actions such as \texttt{yield()}
+from \texttt{Deferred.t} into the interpreter monad.
+
+\subsection{Advanced Usage}
+
+For \textbf{advanced usage}, the borrow checker uses a \textbf{persistent borrow
+graph} implemented in \path{src/common/borrow_graph.ml}. The graph is carried
+in the state of \path{src/passes/borrowcheck.ml}, so each borrow-checking step
+receives one version of the graph and returns the next version.
+
+The graph stores borrow relationships as \emph{immutable edges}:
+
+\begin{lstlisting}
+type owner =
+  | Stored of AbsLang.ident
+  | Temporary
+
+type edge =
+  { owner : owner
+  ; target : target
+  }
+\end{lstlisting}
+
+A target is the borrowed root variable together with the borrow kind
+(\texttt{\&} or \texttt{\&mut}). A \emph{stored edge} means ``reference variable
+\texttt{r} keeps root \texttt{x} borrowed'', and a \emph{temporary edge} means
+``this expression borrows \texttt{x} until the current statement ends''.
+Adding, removing, merging, or clearing edges returns a \textbf{new graph}.
+
+The core operations are small, but they are used throughout the borrow checker:
+
+\begin{lstlisting}
+let add_edge edge graph =
+  if List.exists graph ~f:(same_edge edge)
+  then graph
+  else edge :: graph
+
+let add_owned ~owner target graph =
+  add_edge { owner = Stored owner; target } graph
+
+let merge a b =
+  List.fold b ~init:a ~f:(fun graph edge -> add_edge edge graph)
+\end{lstlisting}
+
+The graph is part of the \textbf{borrow-checker state}:
+
+\begin{lstlisting}
+type env =
+  { owns : ownership Env.t
+  ; graph : Borrow_graph.t
+  }
+
+let map_graph f = M.map_access graph ~f
+\end{lstlisting}
+
+\textbf{Borrow-graph updates} go through this state field. The checker calls
+\texttt{Borrow\_graph.active} before reads,
+moves, assignments, and borrows to find active edges for a root. It calls
+\texttt{add\_owned\_all} when a reference variable is bound, \texttt{remove\_owner}
+when a reference goes out of scope or is overwritten, and \texttt{add\_temporary}
+when an expression creates a short-lived borrow. Control flow also uses the same
+structure: blocks call \texttt{keep\_outer}, \texttt{if} expressions and
+statements call \texttt{merge} or \texttt{merge\_stored}, and each statement
+finishes with \texttt{clear\_temporaries}. The important property is that these
+operations \emph{return new graphs instead of mutating the previous one}.
+
+\subsection{Type and Ownership Checks}
+
+This section summarizes the checks that support the implemented features.
+
+\subsubsection{Typechecking}
+
+\textbf{Lowering} resolves source names to unique identifiers before
+typechecking. The typechecker then records variable types, binding mutability,
+and function signatures. It checks the ordinary shape of expressions: literals,
+lists, indexing, conditionals, function calls, assignments, borrows, and
+dereferences.
+
+Assignments are checked against the type of the target \emph{place}. The place
+must be writable, so assigning to an immutable binding is rejected before the
+borrow checker runs. Borrowing is also typed here: \texttt{\&p} produces a
+\emph{shared reference}, \texttt{\&mut p} requires a writable place and produces
+a \emph{mutable reference}, and dereferencing requires either kind of reference.
+
+\subsubsection{Ownership and Borrows}
+
+Borrow checking runs \emph{after} typechecking. It tracks whether each owned value is
+still available or has been moved, and it stores active borrow edges in the
+persistent graph described in Section 3. The copyable values are
+\texttt{int}, \texttt{bool}, \texttt{unit}, and shared references. Lists and
+mutable references are \textbf{affine}: moving one transfers ownership.
+
+\textbf{Reads, moves, assignments, and borrows} all consult the active borrow
+graph. A move, assignment, or mutable borrow requires the root variable to have
+no active borrows. A shared borrow is allowed unless there is already an active
+mutable borrow. Temporary borrows are cleared at the end of the statement, while
+stored borrows stay attached to the reference variable that owns them.
+
+\subsubsection{Spawning and Runtime Checks}
+
+\texttt{spawn(f(args))} is accepted only for function calls whose argument types
+contain no references. \texttt{yield()} has type \texttt{unit} and is handled by
+the interpreter's Async-based scheduler. List bounds are checked by the
+interpreter during execution.
+
+\begin{thebibliography}{1}
+
+\bibitem{denommus_monadic}
+{Denommus}.
+\newblock Monadic: A monad library for OCaml.
+\newblock \url{https://github.com/Denommus/monadic}, 2024.
+
+\bibitem{janestreet_accessor}
+{Jane Street}.
+\newblock Accessor: Nested functional data structure accessors.
+\newblock \url{https://github.com/janestreet/accessor}, 2026.
+
+\bibitem{janestreet_async}
+{Jane Street}.
+\newblock Async: Jane Street's asynchronous execution library.
+\newblock \url{https://github.com/janestreet/async}, 2026.
+
+\bibitem{janestreet_base}
+{Jane Street}.
+\newblock Base: Standard library for OCaml.
+\newblock \url{https://github.com/janestreet/base}, 2026.
+
+\bibitem{janestreet_ppx_jane}
+{Jane Street}.
+\newblock ppx\_jane: Jane Street PPX rewriters.
+\newblock \url{https://github.com/janestreet/ppx_jane}, 2026.
+
+\bibitem{dune}
+{OCaml Dune Project}.
+\newblock Dune: Composable build system for OCaml.
+\newblock \url{https://github.com/ocaml/dune}, 2026.
+
+\end{thebibliography}
+
+\clearpage
+\appendix
+\setcounter{subsection}{0}
+\setcounter{subsubsection}{0}
+\renewcommand{\thesubsection}{\Alph{subsection}}
+\renewcommand{\thesubsubsection}{\thesubsection.\arabic{subsubsection}}
+\begin{center}
+  {\Huge\bfseries Appendix}
+\end{center}
+\vspace{1em}
+
+\subsection{Example Programs}
+\label{appendix:examples}
+
+These are the small programs used to show the implemented feature groups. They
+can be run with \texttt{make run FILE=examples/<name>.lang}.
+
+\begingroup
+\lstset{basicstyle=\scriptsize\ttfamily, framesep=3pt}
+\noindent\begin{minipage}[t]{0.48\linewidth}
+
+\subsubsection{Phase 0: functions and control flow}
+\label{appendix:example-phase0}
+
+\texttt{examples/phase0.lang} returns \texttt{120}.
+\begin{lstlisting}
+fn fact (n : int) -> int {
+  if (n == 0) then {
+    return 1;
+  };
+  return n * fact(n - 1)
+};
+return fact(5);
+\end{lstlisting}
+
+\subsubsection{Phase 1: affine ownership}
+\label{appendix:example-phase1}
+
+\texttt{examples/phase1.lang} returns \texttt{0}.
+\begin{lstlisting}
+fn first (xs : [int]) -> int {
+  return xs[0]
+};
+
+let xs = [10, 20];
+let ys = xs;
+
+first(ys);
+
+return 0;
+\end{lstlisting}
+
+\subsubsection{2A/2B: lists and copyable primitives}
+\label{appendix:example-phase2}
+
+\texttt{examples/phase2.lang} returns \texttt{[4, 2, 3]}.
+\begin{lstlisting}
+let x = 1;
+let y = x;
+let mut xs = [x, y];
+
+push(xs, 3);
+insert(xs, 1, 4);
+remove(xs, 0);
+
+xs[1] = xs[1] + y;
+
+return xs
+\end{lstlisting}
+
+\end{minipage}\hfill
+\begin{minipage}[t]{0.48\linewidth}
+
+\subsubsection{3A: immutable borrows}
+\label{appendix:example-phase3a}
+
+\texttt{examples/phase3a.lang} returns \texttt{42}.
+\begin{lstlisting}
+fn read (x : &int) -> int {
+  return *x
+};
+
+let value = 21;
+let a = &value;
+let b = &value;
+
+return read(a) + read(b);
+\end{lstlisting}
+
+\subsubsection{3B: mutable borrows}
+\label{appendix:example-phase3b}
+
+\texttt{examples/phase3b.lang} returns \texttt{42}.
+\begin{lstlisting}
+fn set (x : &mut int) -> int {
+  *x = 42;
+  return 0
+};
+
+let mut value = 1;
+
+set(&mut value);
+
+return value;
+\end{lstlisting}
+
+\subsubsection{4B: thread-safe spawn and yield}
+\label{appendix:example-phase4b}
+
+\texttt{examples/phase4b.lang} spawns two finite cooperative tasks.
+\begin{lstlisting}
+fn worker (mut n : int) -> unit {
+  while n > 0 {
+    yield();
+    n = n - 1
+  };
+  return yield()
+};
+
+spawn(worker(2));
+spawn(worker(3));
+return yield()
+\end{lstlisting}
+
+\end{minipage}
+\endgroup
+
+\clearpage
+
+\subsection{Project README}
+\label{appendix:readme}
+
+The project README is included here for completeness. It is the practical guide
+for installing, testing, and running the implementation.
+
+\begingroup
+\lstset{basicstyle=\small\ttfamily, framesep=5pt}
+\begin{lstlisting}
+# ownership-interp
+
+An OCaml interpreter for a small Rust-like language with ownership types.
+
+This README is for installing and running the project. The complementary report
+is at `report/main.pdf`. It explains the implementation choices and how the
+project maps to the grading criteria.
+
+## Install
+
+The project needs OCaml 5.2 or newer. For a fresh local switch:
+
+```sh
+opam switch create . ocaml-base-compiler.5.2.0 -y
+eval $(opam env)
+opam pin add monadic https://github.com/Denommus/monadic.git#42c0a97c0667ee3daec8a31b26314b696243ee8d -y
+opam install . --deps-only --with-test -y
+```
+
+## Run
+
+```sh
+make build
+make test
+make run                           # REPL
+make run FILE=examples/phase0.lang # run a file
+```
+
+Example programs live in `examples/`.
+\end{lstlisting}
+\endgroup
+
+\end{document}

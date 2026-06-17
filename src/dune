@@ -1,0 +1,7 @@
+(include_subdirs qualified)
+
+(library
+ (name interp)
+ (libraries accessor async base lang_grammar monadic)
+ (preprocess
+  (pps ppx_accessor ppx_jane)))

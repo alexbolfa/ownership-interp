@@ -1,0 +1,11 @@
+fn worker (mut n : int) -> unit {
+  while n > 0 {
+    yield();
+    n = n - 1
+  };
+  return yield()
+};
+
+spawn(worker(2));
+spawn(worker(3));
+return yield()

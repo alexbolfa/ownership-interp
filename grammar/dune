@@ -1,0 +1,17 @@
+; The parser and lexer are generated from grammar/Lang.cf by BNFC, then
+; compiled by ocamllex / ocamlyacc into a small library.
+
+(library
+ (name lang_grammar)
+ (wrapped false)
+ (flags
+  (:standard -w -a-26-27-32-33-37-39))
+ (modules AbsLang LexLang ParLang PrintLang BNFC_Util))
+
+(env
+ (_
+  (formatting disabled)))
+
+(ocamllex LexLang)
+
+(ocamlyacc ParLang)

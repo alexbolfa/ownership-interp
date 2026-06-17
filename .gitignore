@@ -1,0 +1,17 @@
+_build/
+*.install
+.DS_Store
+report/.DS_Store
+
+# LaTeX generated files
+report/*.aux
+report/*.bbl
+report/*.blg
+report/*.log
+report/*.out
+
+# Old/unused local material
+TO DELETE/
+AFPLang.cabal
+report/assets/
+report/figures/

@@ -1,0 +1,6 @@
+(library
+ (name ownership_interp_tests)
+ (libraries interp)
+ (inline_tests)
+ (preprocess
+  (pps ppx_jane)))

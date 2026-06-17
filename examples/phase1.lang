@@ -1,0 +1,11 @@
+fn first (xs : [int]) -> int {
+  return xs[0]
+};
+
+let xs = [10, 20];
+let ys = xs;
+
+first(ys);
+
+return 0;
+

@@ -1,0 +1,101 @@
+entrypoints Program;
+
+Prog. Program ::= [Stmt] ;
+
+--This is the syntax from BNFC to define a list of statements
+separator Stmt ";" ;
+
+-- TYPES --------------------------------------------------------------
+
+TInt.  Type1 ::= "int";
+TBool. Type1 ::= "bool";
+TUnit. Type1 ::= "unit";
+TList. Type1 ::= "[" Type "]";
+TRef. Type1 ::= "&" Type1;
+TMutRef. Type1 ::= "&" "mut" Type1;
+
+_. Type2 ::= "(" Type ")";
+_. Type1 ::= Type2;
+_. Type  ::= Type1;
+
+-- STATEMENTS ---------------------------------------------------------
+
+SLet.    Stmt ::= "let" Ident "=" Exp ;
+SLetMut. Stmt ::= "let" "mut" Ident "=" Exp ;
+SFun.    Stmt ::= "fn" Ident "(" [Param] ")" "->" Type "{" [Stmt] "}" ;
+ParamImm. Param ::= Ident ":" Type ;
+ParamMut. Param ::= "mut" Ident ":" Type ;
+separator Param "," ;
+SAssign. Stmt ::= Lvalue "=" Exp ;
+SBlock.  Stmt ::= "{" [Stmt] "}" ;
+SIf.     Stmt ::= "if" Exp "then" "{" [Stmt] "}" ;
+SIfElse. Stmt ::= "if" Exp "then" "{" [Stmt] "}" "else" "{" [Stmt] "}" ;
+SWhile.  Stmt ::= "while" Exp "{" [Stmt] "}" ;
+SReturn. Stmt ::= "return" Exp ;
+SExpr.   Stmt ::= Exp;
+
+-- ASSIGNMENT TARGETS ------------------------------------------------
+
+LVar.   Lvalue2 ::= Ident;
+LDeref. Lvalue1 ::= "*" Lvalue1;
+LIndex. Lvalue2 ::= Lvalue2 "[" Exp "]";
+_. Lvalue2 ::= "(" Lvalue ")";
+_. Lvalue1 ::= Lvalue2;
+_. Lvalue ::= Lvalue1;
+
+-- EXPRESSIONS --------------------------------------------------------
+
+-- Arithmetic
+EInt. Exp8  ::= Integer;
+
+EMul. Exp6  ::= Exp6 "*" Exp7;
+EDiv. Exp6  ::= Exp6 "/" Exp7;
+EAdd. Exp5  ::= Exp5 "+" Exp6;
+ESub. Exp5  ::= Exp5 "-" Exp6;
+
+-- Booleans
+ETrue.  Exp8  ::= "True";
+EFalse. Exp8  ::= "False";
+
+ENot.   Exp3  ::= "!" Exp3;
+EAnd.   Exp2  ::= Exp2 "&&" Exp3;
+EOr.    Exp1  ::= Exp1 "||" Exp2;
+
+-- Comparisons
+EEq.  Exp4 ::= Exp5 "==" Exp5;
+ELt.  Exp4 ::= Exp5 "<" Exp5;
+EGt.  Exp4 ::= Exp5 ">" Exp5;
+ELeq. Exp4 ::= Exp5 "<=" Exp5;
+EGeq. Exp4 ::= Exp5 ">=" Exp5;
+
+-- Control flow
+EIf.  Exp ::= "if" Exp "then" Exp "else" Exp;
+
+-- Variables
+EVar. Exp8 ::= Ident;
+EDeref. Exp8 ::= "*" Exp8;
+EBorrow. Exp8 ::= "&" Lvalue;
+EBorrowMut. Exp8 ::= "&" "mut" Lvalue;
+
+-- Function calls
+ECall. Exp8 ::= Ident "(" [Exp] ")";
+separator Exp "," ;
+
+-- Lists
+EList.  Exp8 ::= "[" [Exp] "]";
+EIndex. Exp8 ::= Exp8 "[" Exp "]";
+
+-- This part sets up the order of operation
+_. Exp8 ::= "(" Exp ")" ;
+_. Exp7 ::= Exp8 ;
+_. Exp6 ::= Exp7 ;
+_. Exp5 ::= Exp6 ;
+_. Exp4 ::= Exp5 ;
+_. Exp3 ::= Exp4 ;
+_. Exp2 ::= Exp3 ;
+_. Exp1 ::= Exp2 ;
+_. Exp  ::= Exp1 ;
+
+-- For enabling comments
+comment "//" ;
+comment "/*" "*/" ;

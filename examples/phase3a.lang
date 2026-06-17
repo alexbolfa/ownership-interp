@@ -1,0 +1,10 @@
+fn read (x : &int) -> int {
+  return *x
+};
+
+let value = 21;
+let a = &value;
+let b = &value;
+
+return read(a) + read(b);
+
